@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, appendFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, appendFileSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
@@ -9,7 +9,7 @@ export function shopHost(value) {
   return value;
 }
 export function config(env = process.env) {
-  for (const key of ['APP_URL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEY', 'OPERATOR_TOKEN', 'ALLOWED_SHOPS', 'AGENTS_JSON']) {
+  for (const key of ['APP_URL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEY', 'OPERATOR_TOKEN']) {
     if (!env[key]) throw new Error(`Missing configuration: ${key}`);
   }
   const url = new URL(env.APP_URL);
@@ -17,9 +17,9 @@ export function config(env = process.env) {
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('APP_URL must be an origin');
   if (!/^[a-f0-9]{64}$/i.test(env.TOKEN_ENCRYPTION_KEY)) throw new Error('TOKEN_ENCRYPTION_KEY must be 32 bytes as hex');
   if (env.OPERATOR_TOKEN.length < 32) throw new Error('OPERATOR_TOKEN must have at least 32 characters');
-  const shops = env.ALLOWED_SHOPS.split(',').map(x => shopHost(x.trim()));
-  const agents = JSON.parse(env.AGENTS_JSON);
-  if (!Array.isArray(agents) || !agents.length) throw new Error('Configure at least one agent');
+  const shops = (env.ALLOWED_SHOPS || '').split(',').filter(Boolean).map(x => shopHost(x.trim()));
+  const agents = JSON.parse(env.AGENTS_JSON || '[]');
+  if (!Array.isArray(agents)) throw new Error('Invalid agent configuration');
   const ids = new Set(), tokens = new Set();
   for (const a of agents) {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(a.id) || !/^[a-f0-9]{64}$/.test(a.token_sha256) || equal(a.token_sha256, hash(env.OPERATOR_TOKEN)) || ids.has(a.id) || tokens.has(a.token_sha256) || !Array.isArray(a.shops) || !a.shops.length || a.shops.some(s => !shops.includes(s)) || !Array.isArray(a.tools) || a.tools.some(t => !tools.some(tool => tool.name === t))) throw new Error('Invalid agent configuration');
@@ -27,31 +27,41 @@ export function config(env = process.env) {
   }
   const version = env.SHOPIFY_API_VERSION || '2026-10';
   if (!/^20\d{2}-(01|04|07|10)$/.test(version)) throw new Error('Invalid Shopify API version');
-  return { origin: url.origin, clientId: env.SHOPIFY_CLIENT_ID, secret: env.SHOPIFY_CLIENT_SECRET, encryptionKey: Buffer.from(env.TOKEN_ENCRYPTION_KEY, 'hex'), operator: env.OPERATOR_TOKEN, shops, agents, version, scopes: env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_inventory', writes: env.ENABLE_PRODUCT_WRITES === 'true', dir: resolve(env.DATA_DIR || './data') };
+  return { origin: url.origin, clientId: env.SHOPIFY_CLIENT_ID, secret: env.SHOPIFY_CLIENT_SECRET, encryptionKey: Buffer.from(env.TOKEN_ENCRYPTION_KEY, 'hex'), operator: env.OPERATOR_TOKEN, shops, agents, version, scopes: env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_inventory', writes: env.ENABLE_PRODUCT_WRITES === 'true', webhookHosts: (env.WEBHOOK_ALLOWED_HOSTS || '').split(',').filter(Boolean).map(x => x.trim().toLowerCase()), dir: resolve(env.DATA_DIR || './data') };
 }
 export class Vault {
   constructor(dir, key) { this.dir = dir; this.key = key; mkdirSync(dir, { recursive: true, mode: 0o700 }); }
   file(shop) { return join(this.dir, `${shopHost(shop)}.enc`); }
   get(shop) {
-    const path = this.file(shop);
+    return this.read(this.file(shop), shop);
+  }
+  read(path, context) {
     if (!existsSync(path)) return null;
     const { iv, tag, body } = JSON.parse(readFileSync(path, 'utf8'));
     const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(iv, 'hex'));
-    decipher.setAAD(Buffer.from(shop)); decipher.setAuthTag(Buffer.from(tag, 'hex'));
+    decipher.setAAD(Buffer.from(context)); decipher.setAuthTag(Buffer.from(tag, 'hex'));
     return JSON.parse(Buffer.concat([decipher.update(Buffer.from(body, 'hex')), decipher.final()]).toString());
   }
   set(shop, record) {
+    this.write(this.file(shop), shopHost(shop), record);
+  }
+  write(path, context, record) {
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.key, iv);
-    cipher.setAAD(Buffer.from(shopHost(shop)));
+    cipher.setAAD(Buffer.from(context));
     const body = Buffer.concat([cipher.update(JSON.stringify(record)), cipher.final()]);
-    const path = this.file(shop), temp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
+    const temp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
     writeFileSync(temp, JSON.stringify({ iv: iv.toString('hex'), tag: cipher.getAuthTag().toString('hex'), body: body.toString('hex') }), { mode: 0o600 });
     renameSync(temp, path);
   }
+  remove(shop) { rmSync(this.file(shop), { force: true }); }
   audit(record) { appendFileSync(join(this.dir, 'audit.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n', { mode: 0o600 }); }
 }
 export function callbackHmac(params, secret) {
   if (['hmac', 'shop', 'state', 'code', 'timestamp'].some(k => params.getAll(k).length !== 1)) return false;
+  return shopifyHmac(params, secret);
+}
+export function shopifyHmac(params, secret) {
+  if (params.getAll('hmac').length !== 1 || [...new Set(params.keys())].some(k => params.getAll(k).length !== 1)) return false;
   const message = [...params.entries()].filter(([k]) => k !== 'hmac').sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('&');
   const expected = createHmac('sha256', secret).update(message).digest('hex');
   return equal(expected, params.get('hmac'));
@@ -82,8 +92,9 @@ export function validate(name, a) {
   return a;
 }
 export function authorize(cfg, bearer, name, shop) {
-  const agent = cfg.agents.find(a => equal(a.token_sha256, hash(bearer || '')));
+  const agent = cfg.registry ? cfg.registry.agent(bearer) : cfg.agents.find(a => equal(a.token_sha256, hash(bearer || '')));
   if (!agent || !agent.shops.includes(shop) || !agent.tools.includes(name)) throw new Error('Access denied');
+  if (cfg.registry) cfg.registry.check(agent.id, shop, name);
   return agent;
 }
 export function createShopify(cfg, vault, transport = fetch) {
@@ -118,6 +129,7 @@ export function createShopify(cfg, vault, transport = fetch) {
 export async function execute(cfg, vault, api, agent, name, args) {
   const a = validate(name, args);
   if (!agent.shops.includes(a.shop) || !agent.tools.includes(name)) throw new Error('Access denied');
+  if (cfg.registry) cfg.registry.check(agent.id, a.shop, name, name === 'product_update' && a.dry_run === false);
   const variables = { first: a.first ?? 20, after: a.after ?? null, query: a.query ?? null };
   let result;
   if (name === 'shop_info') result = await api.graphql(a.shop, '{ shop { id name myshopifyDomain currencyCode ianaTimezone } }');

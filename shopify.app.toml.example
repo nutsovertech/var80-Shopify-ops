@@ -1,4 +1,6 @@
-# Copy to shopify.app.toml after registering the app in Shopify Dev Dashboard.
+# Create a PUBLIC-distribution app in a Partner organization, then copy this file.
+# Distribution is selected in Shopify, not by a TOML flag. Existing custom registrations
+# cannot be switched to public distribution; use a new registration in that case.
 # This example is not a registered app and contains no credentials.
 client_id = "REPLACE_WITH_SHOPIFY_CLIENT_ID"
 name = "Var80 Store Ops"
@@ -17,3 +19,11 @@ api_version = "2026-10"
 [[webhooks.subscriptions]]
 topics = ["app/uninstalled"]
 uri = "/webhooks"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create", "orders/updated", "products/update", "inventory_levels/update"]
+uri = "/webhooks"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "/webhooks/compliance"

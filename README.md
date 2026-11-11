@@ -1,125 +1,136 @@
 # Var80 Store Ops
 
-Backend-only Shopify app service for Var80. No dashboard, merchant configuration screens, or frontend build. Configuration lives in environment secrets and source-controlled examples. Shopify merchants still approve installation and requested scopes on Shopify's own authorization screen.
+A multi-client Shopify integration with an **admin console**, **client portal**, API/MCP gateway and persistent store-to-bot webhook relay. Run one VPS service with one public Shopify app registration. Each store still installs and authorizes **Var80 Store Ops** separately.
 
-## Status
+## Status and interfaces
 
-Implemented and locally tested: standalone merchant OAuth, encrypted per-store offline tokens, expiring-token refresh, authenticated REST tools, stateless HTTP MCP, stdio MCP bridge, and signed uninstall handling. This repository does **not** register an app in Shopify, create Shopify credentials, install on a merchant store, or deploy a running service. Live Shopify API behavior must be validated on a development store before production use.
+The code is implemented and locally tested with mocked Shopify responses. App registration/review, VPS deployment, live-store validation and external bot connections remain separate tasks. The Shopify app is **non-embedded**; both interfaces run on your own domain.
 
-## Supported operations
+| Interface | Access | Functions |
+| --- | --- | --- |
+| /admin | Operator key | Clients, stores, bot registration/keys, per-store tools/writes, event routes, delivery retries, privacy cases |
+| /client | Client portal key | Own stores/bots only; add/connect/reconnect/pause stores; control store writes; own delivery status |
+| /mcp | Bot bearer key | Stateless Streamable HTTP tool calls |
+| /v1/tools and /v1/call | Bot bearer key | REST tool discovery and execution |
+| /webhooks | Shopify HMAC | Operational events and uninstall |
+| /webhooks/compliance | Shopify HMAC | Public-app compliance topics |
 
-| Tool | Behavior |
-| --- | --- |
-| `shop_info` | Store identity, currency and timezone |
-| `products_list` | Products, descriptions and SEO fields; cursor pagination |
-| `orders_list` | Order status and totals; excludes customer identity fields |
-| `inventory_list` | Inventory item IDs, SKU and tracking status |
-| `product_update` | Product title, description HTML and SEO; dry run by default |
+Registry changes persist immediately without a restart. Pausing a client/store/bot blocks subsequent calls. Already-running upstream requests cannot be recalled. Store ownership cannot be reassigned through the console.
 
-Product execution requires `ENABLE_PRODUCT_WRITES=true`, agent permission for `product_update`, and `dry_run:false` on the individual call. Price changes, inventory adjustments, refunds, deletion, order writes and arbitrary GraphQL execution are not implemented. Add each operation deliberately in `src/core.mjs` with corresponding scopes and tests.
+## Run on your VPS
 
-## Run
-
-Requires Node.js 22+. No third-party runtime dependencies or install step.
+Node.js 22+; no package dependencies or frontend build.
 
 ```sh
 cp .env.example .env
-# Configure .env with real values, then:
+# Set secrets and APP_URL, then:
 npm test
 npm start
 ```
 
-Generate the encryption key and operator/agent tokens with a password manager or Node's `crypto.randomBytes`. Use at least 32 random bytes per token. Store raw agent tokens only in the relevant agent's secret environment; put their SHA-256 hex digests in `AGENTS_JSON`. Operator and agent credentials must be distinct.
+Set Shopify client ID/secret, a 32-byte encryption key as 64 hex characters, and a random operator key of at least 32 characters. Generate secrets securely and never commit .env. Open /admin and sign in with OPERATOR_TOKEN.
 
-The server binds to localhost by default. Place it behind an HTTPS reverse proxy with request limits, rate limiting, and access logs that omit query strings, bodies, cookies, and authorization headers. For a container set `HOST=0.0.0.0`, pass secrets through the hosting environment, and mount a writable persistent volume at `/app/data` owned by container user `node` (UID 1000).
+1. Create a client; enroll its permanent myshopify.com hostname.
+2. Generate a connection link and have the merchant approve it in Shopify.
+3. Register a bot and securely save its key shown once.
+4. Configure tools, execution permission and event topics separately on each store assignment.
+5. Issue a client portal key if required. Rotation revokes its previous key and existing client sessions.
+6. Configure WEBHOOK_ALLOWED_HOSTS on the server before adding bot receivers. Network-policy changes require a restart.
 
-Run **one backend process/replica**. Encrypted file storage, refresh coordination and pending OAuth state are designed for a single instance. Do not use ephemeral/serverless filesystems. For multiple replicas, migrate the vault and OAuth state to a transactional database with refresh locking. A process restart expires unfinished installation links; request another link.
+ENABLE_PRODUCT_WRITES is the global kill switch. Actual product execution also requires the store write switch, bot/store write grant, product_update permission and dry_run:false. A tool granted on one store is never implicitly granted on another.
 
-## Register in Shopify
+Run one supervised process behind HTTPS with persistent writable DATA_DIR, reverse-proxy request/rate limits and access logs that omit query strings, credentials, cookies and bodies. Docker includes src/ and web/; mount /app/data owned by UID 1000. Horizontal scaling requires transactional shared storage, OAuth/session storage and distributed refresh locking.
 
-1. In Shopify Dev Dashboard, create **Var80 Store Ops**, owned by the appropriate business account.
-2. Choose the distribution appropriate to the target store. Custom distribution targets one store or stores within one eligible Plus organization. Unrelated merchant stores require separate custom app registrations or the public-distribution route with Shopify approval. Use a separate deployment/configuration per app registration in this implementation.
-3. Configure the app as non-embedded with application URL `https://YOUR_BACKEND_HOST` and exact redirect URL `https://YOUR_BACKEND_HOST/auth/callback`.
-4. Request `read_products,write_products,read_orders,read_inventory` (or the smaller set your configured tools need). Release the app version and configure the install/distribution link as required by Shopify.
-5. Subscribe to `app/uninstalled` at `https://YOUR_BACKEND_HOST/webhooks`. `shopify.app.toml.example` provides the equivalent CLI configuration; copy it and replace placeholders if using Shopify CLI.
-6. Put the real client ID, client secret, host origin, exact store allowlist, encryption key and agent policies in the backend's environment.
-7. Start merchant authorization using the operator endpoint below, then open the returned single-use URL in the installing merchant's browser. Merchant approval and a valid callback complete token storage. Shopify's distribution/install flow must permit this app on that store.
+## Public Shopify registration
 
-This implementation uses authorization-code exchange for client stores. It does not implement the own-organization client-credentials grant. It requests expiring offline tokens and refreshes when needed. Orders remain subject to Shopify history restrictions and protected-data requirements. Public distribution additionally requires the applicable Shopify review/privacy/compliance work; this starter is not an App Store submission package.
+Create Var80 Store Ops in a Partner organization and select Public distribution. Shopify does not allow changing a previously selected distribution method; if your existing registration selected Custom, create a new public registration. GitHub visibility is unrelated.
+
+Use shopify.app.toml.example for the application URL, exact /auth/callback redirect, scopes and webhook subscriptions. Distribution is selected in Shopify, not via a TOML flag. Release the configuration.
+
+This is managed-client enrollment: add a store in the console before giving its merchant the installation link. A signed Shopify launch for an enrolled, disconnected store begins OAuth; a connected store opens the client portal login. Unknown stores get an enrollment message.
+
+Public distribution requires Shopify approval for unrelated live stores. An approved app can use limited listing visibility and direct installation links. Every store still authorizes independently. Complete the applicable listing, support/privacy URLs, protected-data declarations and review requirements before production distribution. This repository is not an approved App Store submission.
 
 Official references:
-- https://shopify.dev/docs/apps/build/authentication-authorization/authenticate-standalone-apps
 - https://shopify.dev/docs/apps/launch/distribution
-- https://shopify.dev/docs/api/usage/access-scopes
+- https://shopify.dev/docs/apps/launch/distribution/visibility
+- https://shopify.dev/docs/apps/launch/app-store-review/review-process
+- https://shopify.dev/docs/apps/build/authentication-authorization/authenticate-standalone-apps
+- https://shopify.dev/docs/apps/build/compliance/privacy-law-compliance
 
-## Operator installation API
+## Tools and agent connection
 
-With `OPERATOR_TOKEN` exported securely in your terminal:
+| Tool | Implemented behavior |
+| --- | --- |
+| shop_info | Store identity, currency and timezone |
+| products_list | Products, descriptions and SEO with pagination |
+| orders_list | Order status/totals without customer identity fields |
+| inventory_list | Item ID, SKU and tracking status |
+| product_update | Product title, description HTML and SEO; preview by default |
 
-```sh
-curl --fail-with-body https://YOUR_BACKEND_HOST/operator/install-link \
-  -H "Authorization: Bearer $OPERATOR_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"shop":"YOUR_STORE.myshopify.com"}'
-```
+Price/inventory adjustments, refunds, deletion, order writes and arbitrary GraphQL are not implemented. Shopify history limits and protected-data requirements still apply. Adding bot grants cannot exceed merchant-approved Shopify scopes. Scope changes require a released configuration and merchant reapproval.
 
-The returned `install_url` expires after ten minutes and is single-use. Treat it as sensitive. Opening it sets an HttpOnly state cookie, then redirects to Shopify. The callback validates HMAC, store, timestamp, nonce and browser cookie before exchanging the code. Backend secrets are never returned to the merchant or AI client.
+Connect compatible remote agents to https://YOUR_HOST/mcp with Authorization: Bearer BOT_KEY. Stateless JSON responses over HTTP POST are supported; SSE subscriptions, resumability and sessions are not.
 
-## Agent REST API
-
-`GET /v1/tools` lists tools permitted for the bearer identity. `POST /v1/call` accepts:
-
-```json
-{
-  "name": "product_update",
-  "arguments": {
-    "shop": "YOUR_STORE.myshopify.com",
-    "product_id": "gid://shopify/Product/123",
-    "title": "Proposed title",
-    "dry_run": true
-  }
-}
-```
-
-Send `Authorization: Bearer AGENT_TOKEN`. Each agent is independently restricted to the exact stores and tools in `AGENTS_JSON`. Review the returned preview before explicit execution. A timeout on a write may mean the result is unknown; read the product and consult its operation ID before retrying. Mutations are not automatically retried.
-
-## MCP clients
-
-### Remote clients that support bearer authentication
-
-Connect to `https://YOUR_BACKEND_HOST/mcp` using Streamable HTTP POST and a bearer token. The server is stateless and returns JSON responses. GET/SSE subscriptions, sessions and resumability are not provided. Tools run under the same backend permissions as REST calls.
-
-### Cursor or another stdio client
-
-Configure an MCP server using the absolute path of `src/mcp.mjs` on the machine running the client:
+Cursor/stdio clients can run src/mcp.mjs with STORE_OPS_URL and STORE_OPS_AGENT_TOKEN injected through client secret storage:
 
 ```json
-{
-  "mcpServers": {
-    "var80-store-ops": {
-      "command": "node",
-      "args": ["/ABSOLUTE/PATH/var80-Shopify-ops/src/mcp.mjs"],
-      "env": {
-        "STORE_OPS_URL": "https://YOUR_BACKEND_HOST",
-        "STORE_OPS_AGENT_TOKEN": "INJECT_FROM_CLIENT_SECRET_STORAGE"
-      }
-    }
-  }
-}
+{"mcpServers":{"var80-store-ops":{"command":"node","args":["/ABSOLUTE/PATH/var80-Shopify-ops/src/mcp.mjs"],"env":{"STORE_OPS_URL":"https://YOUR_HOST","STORE_OPS_AGENT_TOKEN":"INJECT_FROM_SECRET_STORAGE"}}}}
 ```
 
-Do not commit the client configuration containing a raw token. The bridge speaks newline-delimited JSON-RPC over stdio and makes HTTPS requests to the backend; it does not hold Shopify credentials.
+REST execution body:
 
-### ChatGPT
+```json
+{"name":"product_update","arguments":{"shop":"your-store.myshopify.com","product_id":"gid://shopify/Product/123","title":"Proposed title","dry_run":true}}
+```
 
-The backend is not automatically connected to this conversation. A ChatGPT connection requires a supported custom MCP connector/action and compatible authentication in that environment. This repository provides bearer authentication only; it does not provide an OAuth authorization server for ChatGPT or dynamic client registration. If the target ChatGPT connection requires OAuth, add that authentication layer before claiming ChatGPT connectivity. Shopify merchant OAuth and AI-client authentication are separate systems.
+Grok agents can use these interfaces if their environment supports bearer authentication. Test actual compatibility. **An OpenAI API key does not connect ChatGPT.** The service does not call AI models. ChatGPT needs its own supported connector/action authentication, and this app does not implement an OAuth authorization server for ChatGPT.
 
-## Storage and operations
+## Webhook event routing
 
-Tokens are AES-256-GCM encrypted and bound to the store hostname. Keep the encryption key backed up separately from the persistent data volume. Changing it without migrating encrypted records makes existing connections unreadable. Files have restrictive creation permissions; protect the host and backups too.
+Agents pull through MCP/API. Events travel Shopify → Var80 Store Ops → configured bot routine.
 
-`data/audit.jsonl` records agent identity, store, tool and product mutation intent/result hashes, not access tokens or full customer/product payloads. Mutation responses include before/after values for the caller; the local audit is not a full rollback archive. Apply your own retention and centralized log policy. Signed uninstall events remove usable tokens. Rotate/revoke individual agent access through secret configuration and restart the service.
+Supported topics: orders/create, orders/updated, products/update and inventory_levels/update. Select them in both the Shopify subscription configuration and bot/store grants. Every event is deduplicated per Shopify event ID and bot. Payloads contain event_id, shop, topic and resource_id only; bots fetch additional permitted data through the gateway.
 
-## Verification
+Receivers get Authorization: Bearer WEBHOOK_SECRET, X-Var80-Event-Id and X-Var80-Signature: sha256=HMAC_HEX over the exact JSON body. Adapt actual Grok receivers to this contract where needed. The outbound receiver secret is separate from the bot's inbound API/MCP key.
 
-`npm test` exercises authorization isolation, hostname validation, ciphertext protection, dry-run/write policy, HTTP origin checks, OAuth rejection paths, signed uninstall, concurrent token refresh, stdio protocol handling and remote MCP tool permissions. Shopify calls are mocked; no live store is modified by tests.
+Destinations require HTTPS, port 443 and exact server-allowlisted hostnames. URL credentials/query strings/fragments, redirects and private DNS destinations are rejected. DNS answers are validated and pinned to each outbound request.
+
+The queue persists and drains every five seconds, with up to five attempts and exponential delay. Failed deliveries can be manually retried. Receivers must deduplicate event_id because a timeout can occur after processing. Paused/revoked grants cancel pending deliveries on processing. The queue's configured payload format has not been tested against a live Grok routine.
+
+## Privacy and uninstall
+
+All webhook mutations require Shopify HMAC. Uninstall revokes usable tokens and cancels pending events. shop/redact deletes local store tokens, enrollment, grants, deliveries and privacy cases. customers/redact removes that shop's delivery metadata and scrubs prior customer-request identifiers. customers/data_request keeps only request/customer/order identifiers in the encrypted registry.
+
+Compliance requests appear as pending admin cases. View their details, finish required export/communication/downstream deletion, then record a resolution note. An HTTP acknowledgment is not privacy fulfillment. External bot systems and backups require operator handling. No public-app compliance approval is claimed.
+
+## Management API and authentication
+
+All management routes accept operator/client bearer keys or HttpOnly console sessions. Cookie-based mutations require X-CSRF-Token. Cross-origin requests are rejected. Login is rate-limited per direct peer IP; add proxy-level limits. Tokens never enter localStorage.
+
+| Route | Permission |
+| --- | --- |
+| POST /api/login, POST /api/logout | Console session lifecycle |
+| GET /api/overview | Role-scoped, credentials omitted |
+| POST /api/clients, PATCH /api/clients/:id | Admin |
+| POST /api/clients/:id/portal-key | Admin; issue/rotate |
+| POST /api/stores | Admin or own client |
+| PATCH /api/stores/:shop | Admin or owning client |
+| POST /api/stores/:shop/install-link | Admin or owning client |
+| POST /api/bots, PATCH /api/bots/:id | Admin |
+| POST /api/bots/:id/rotate-key | Admin |
+| POST /api/deliveries/:id/retry | Admin |
+| GET /api/compliance/:id | Admin |
+| POST /api/compliance/:id/complete | Admin; resolution note required |
+
+Authorized chat/gateway integrations may use these endpoints; this conversation is not automatically connected.
+
+## Persistence, migration and boundaries
+
+registry.enc holds encrypted clients, stores, bot grants, webhook secrets and queues. Per-store encrypted files hold Shopify tokens. Client/bot keys are hashed; the raw keys are shown only when issued. Back up the encryption key separately and protect the host/backups.
+
+Legacy ALLOWED_SHOPS and AGENTS_JSON import once into an Existing stores client only when no registry exists. Existing encrypted Shopify token files remain readable. Further registry edits come through the console/API. In-memory console/OAuth sessions end on restart; registry and queue records survive. Keep one process/replica.
+
+audit.jsonl records configuration/tool metadata and mutation hashes; the console displays event-delivery status, not historical tool audit files. Mutation responses include before/after values, but this is not a full rollback archive. On write timeout, read the product before retrying. Queue/audit retention requires an operator policy; records remain until redaction or approved maintenance cleanup.
+
+Tests cover tenant isolation, store/tool/write boundaries, key revocation, CSRF, OAuth validation, encrypted persistence, event retries/deduplication, receiver restrictions and compliance processing. Live Shopify, VPS and bot-receiver acceptance remain pending.
