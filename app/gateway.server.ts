@@ -1,6 +1,6 @@
 type ShopifySession = {
   shop: string;
-  accessToken: string;
+  accessToken?: string;
   scope?: string | null;
   expires?: Date | null;
   refreshToken?: string | null;
@@ -39,6 +39,7 @@ async function call<T>(shop: string, suffix = "", init: RequestInit = {}): Promi
 }
 
 export function connectGatewayStore(session: ShopifySession, name = session.shop) {
+  if (!session.accessToken) throw new Error("Shopify session has no access token; reauthorize the app");
   return call<GatewaySnapshot>(session.shop, "/connect", {
     method: "POST",
     body: JSON.stringify({
