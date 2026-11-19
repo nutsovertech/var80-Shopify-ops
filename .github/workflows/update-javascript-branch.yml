@@ -1,0 +1,14 @@
+name: Update JavaScript branch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  convert:
+    uses: ./.github/workflows/convert-to-javascript.yml
+    with:
+      source-branch: main
+      target-branch: javascript

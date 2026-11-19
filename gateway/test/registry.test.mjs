@@ -11,7 +11,7 @@ import { app } from '../src/server.mjs';
 const op = 'test-operator-with-at-least-thirty-two-characters';
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'var80-registry-')); t.after(() => rmSync(dir,{recursive:true,force:true}));
-  const cfg = config({ APP_URL:'http://localhost:3000', SHOPIFY_CLIENT_ID:'client', SHOPIFY_CLIENT_SECRET:'secret', TOKEN_ENCRYPTION_KEY:'ab'.repeat(32), OPERATOR_TOKEN:op, DATA_DIR:dir, ENABLE_PRODUCT_WRITES:'true', WEBHOOK_ALLOWED_HOSTS:'bots.example.com' });
+  const cfg = config({ APP_URL:'http://localhost:3000', SHOPIFY_CLIENT_ID:'client', SHOPIFY_CLIENT_SECRET:'secret', TOKEN_ENCRYPTION_KEY:'ab'.repeat(32), OPERATOR_TOKEN:op, INTERNAL_API_TOKEN:'internal-test-token-with-sufficient-entropy', DATA_DIR:dir, ENABLE_PRODUCT_WRITES:'true', WEBHOOK_ALLOWED_HOSTS:'bots.example.com' });
   const vault = new Vault(dir,cfg.encryptionKey), registry = new Registry(cfg,vault);
   return {cfg,vault,registry};
 }
@@ -93,4 +93,17 @@ test('public compliance webhooks authenticate, redact local records and preserve
   assert.equal(f.registry.data.compliance[0].status,'pending');assert.equal(f.registry.data.compliance[0].payload.customer_id,123);
   assert.equal((await webhook('customers/redact','three',{shop_domain:shop})).status,200);assert.equal(f.registry.data.compliance[0].payload,undefined);
   assert.equal((await webhook('shop/redact','four',{shop_domain:shop})).status,200);assert.equal(f.vault.get(shop),null);assert.equal(f.registry.store(shop),undefined);
+});
+test('embedded app internal API is isolated and manages the authoritative registry',async t=>{
+  const f=await httpFixture(t),shop='embedded.myshopify.com';
+  const json=(path,method='GET',data,token='internal-test-token-with-sufficient-entropy')=>f.call(path,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});
+  assert.equal((await json(`/internal/stores/${shop}`)).status,404);
+  assert.equal((await json(`/internal/stores/${shop}/connect`,'POST',{access_token:'shopify-access-token',scope:'read_products'} ,'wrong')).status,401);
+  const connected=await(await json(`/internal/stores/${shop}/connect`,'POST',{name:'Embedded client',access_token:'shopify-access-token',scope:'read_products'})).json();
+  assert.equal(connected.store.connection,'connected');assert.ok(connected.portal_token);assert.equal(f.vault.get(shop).access_token,'shopify-access-token');
+  const bot=await(await json(`/internal/stores/${shop}/bots`,'POST',{name:'Embedded bot',tools:['products_list'],events:['products/update'],writes:false,webhook:{url:'https://bots.example.com/events',secret:'s'.repeat(40)}})).json();
+  assert.ok(bot.token);assert.equal((await(await json(`/internal/stores/${shop}`)).json()).bots.length,1);
+  assert.equal((await json(`/internal/stores/${shop}/events`,'POST',{topic:'products/update',event_id:'embedded-event-1',payload:{id:1}})).status,200);
+  assert.equal(f.registry.data.deliveries.length,1);
+  await json(`/internal/stores/${shop}/uninstall`,'POST',{});assert.equal(f.vault.get(shop).revoked,true);
 });

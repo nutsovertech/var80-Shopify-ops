@@ -1,10 +1,22 @@
 FROM node:22-alpine
-WORKDIR /app
-COPY --chown=node:node package.json ./
-COPY --chown=node:node src ./src
-COPY --chown=node:node web ./web
-RUN mkdir -p /app/data && chown node:node /app/data
-USER node
-ENV HOST=0.0.0.0 PORT=3000 DATA_DIR=/app/data
+RUN apk add --no-cache openssl
+
 EXPOSE 3000
-CMD ["node", "src/server.mjs"]
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json* ./
+
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY . .
+
+RUN npm run build
+
+RUN mkdir -p /data && chown -R node:node /app /data
+
+USER node
+
+CMD ["npm", "run", "docker-start"]

@@ -1,0 +1,14 @@
+query StoreOpsDashboard {
+  shop {
+    name
+    myshopifyDomain
+  }
+  products(first: 5, sortKey: UPDATED_AT, reverse: true) {
+    nodes {
+      id
+      title
+      status
+      totalInventory
+    }
+  }
+}

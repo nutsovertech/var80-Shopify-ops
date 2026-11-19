@@ -1,0 +1,53 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:?set SHOPIFY_API_KEY}
+      SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:?set SHOPIFY_API_SECRET}
+      SHOPIFY_APP_URL: ${SHOPIFY_APP_URL:?set SHOPIFY_APP_URL}
+      SCOPES: read_inventory,read_products,write_products,read_orders
+      DATABASE_URL: file:/data/session.sqlite
+      GATEWAY_INTERNAL_URL: http://gateway:3000
+      GATEWAY_INTERNAL_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      GATEWAY_INTERNAL_ALLOW_HTTP: "true"
+    volumes:
+      - app_sessions:/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  gateway:
+    build: ./gateway
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      APP_URL: ${GATEWAY_APP_URL:?set GATEWAY_APP_URL}
+      SHOPIFY_CLIENT_ID: ${SHOPIFY_API_KEY:?set SHOPIFY_API_KEY}
+      SHOPIFY_CLIENT_SECRET: ${SHOPIFY_API_SECRET:?set SHOPIFY_API_SECRET}
+      SHOPIFY_API_VERSION: "2026-10"
+      SHOPIFY_SCOPES: read_products,write_products,read_orders,read_inventory
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set TOKEN_ENCRYPTION_KEY}
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:?set OPERATOR_TOKEN}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN}
+      DATA_DIR: /app/data
+      ENABLE_PRODUCT_WRITES: ${ENABLE_PRODUCT_WRITES:-false}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+    volumes:
+      - gateway_data:/app/data
+    ports:
+      - "127.0.0.1:3001:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  app_sessions:
+  gateway_data:

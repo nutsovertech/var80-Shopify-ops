@@ -65,6 +65,46 @@ export class Registry {
     const s = { shop, client_id: input.client_id, name: input.name ? text(input.name, 'store name') : shop, active: true, writes: false };
     this.data.stores.push(s); this.save(); return s;
   }
+  ensureStore(shop, name = shop) {
+    shop = shopHost(shop);
+    let store = this.store(shop), portalToken;
+    if (!store) {
+      const client = this.createClient({ name });
+      store = this.addStore({ client_id: client.id, shop, name });
+      portalToken = this.portalKey(client.id).token;
+    }
+    return { store, portalToken };
+  }
+  merchantSnapshot(shop) {
+    shop = shopHost(shop);
+    const store = this.store(shop);
+    if (!store) return null;
+    const client = this.client(store.client_id), token = this.vault.get(shop);
+    const bots = this.data.bots.filter(b => b.grants.some(g => g.shop === shop)).map(b => {
+      const grant = b.grants.find(g => g.shop === shop);
+      return { id: b.id, name: b.name, active: b.active, tools: grant.tools, events: grant.events, writes: grant.writes, webhook: b.webhook ? { url: b.webhook.url, configured: true } : null };
+    });
+    return { store: { ...store, scopes: token?.scope || '', connection: token && !token.revoked ? 'connected' : 'disconnected' }, client: { id: client.id, name: client.name, active: client.active }, bots, deliveries: this.data.deliveries.filter(d => d.shop === shop).slice(-25).reverse().map(({ payload, ...d }) => d), settings: { product_writes_enabled: this.cfg.writes } };
+  }
+  merchantPolicy(shop, input) {
+    const store = this.store(shopHost(shop));
+    if (!store) throw new Error('Store not found');
+    if ('writes' in input) store.writes = bool(input.writes);
+    this.save();
+    return this.merchantSnapshot(shop);
+  }
+  merchantBot(shop, input) {
+    shop = shopHost(shop);
+    if (!this.store(shop)) throw new Error('Store not found');
+    if (!Array.isArray(input.tools) || input.tools.some(t => !tools.some(tool => tool.name === t))) throw new Error('Unknown tool');
+    const events = input.events || [];
+    if (!Array.isArray(events) || events.some(e => !EVENT_TOPICS.includes(e))) throw new Error('Unknown event');
+    const created = this.createBot({ name: input.name });
+    const patch = { grants: [{ shop, tools: [...new Set(input.tools)], events: [...new Set(events)], writes: bool(input.writes) }] };
+    if (input.webhook) patch.webhook = input.webhook;
+    this.updateBot(created.id, patch);
+    return created;
+  }
   updateStore(actor, shop, input) {
     const s = this.assertStore(actor, shop);
     const patch = {};
