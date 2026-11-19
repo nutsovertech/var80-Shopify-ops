@@ -10,7 +10,7 @@ import { app } from '../src/server.mjs';
 const shop = 'test-store.myshopify.com', token = 'agent-test-token-with-sufficient-entropy';
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'var80-test-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const cfg = config({ APP_URL: 'http://127.0.0.1:3000', SHOPIFY_CLIENT_ID: 'test-client', SHOPIFY_CLIENT_SECRET: 'test-secret', TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32), OPERATOR_TOKEN: 'operator-test-token-with-sufficient-entropy', DATA_DIR: dir, ALLOWED_SHOPS: shop, AGENTS_JSON: JSON.stringify([{ id: 'test', token_sha256: hash(token), shops: [shop], tools: ['shop_info', 'products_list', 'orders_list', 'inventory_list', 'product_update'] }]) });
+  const cfg = config({ APP_URL: 'http://127.0.0.1:3000', SHOPIFY_CLIENT_ID: 'test-client', SHOPIFY_CLIENT_SECRET: 'test-secret', TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32), OPERATOR_TOKEN: 'operator-test-token-with-sufficient-entropy', INTERNAL_API_TOKEN: 'internal-test-token-with-sufficient-entropy', DATA_DIR: dir, ALLOWED_SHOPS: shop, AGENTS_JSON: JSON.stringify([{ id: 'test', token_sha256: hash(token), shops: [shop], tools: ['shop_info', 'products_list', 'orders_list', 'inventory_list', 'product_update'] }]) });
   return { cfg, vault: new Vault(dir, cfg.encryptionKey) };
 }
 async function serverFixture(t) {

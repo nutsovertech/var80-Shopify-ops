@@ -9,7 +9,7 @@ export function shopHost(value) {
   return value;
 }
 export function config(env = process.env) {
-  for (const key of ['APP_URL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEY', 'OPERATOR_TOKEN']) {
+  for (const key of ['APP_URL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'TOKEN_ENCRYPTION_KEY', 'OPERATOR_TOKEN', 'INTERNAL_API_TOKEN']) {
     if (!env[key]) throw new Error(`Missing configuration: ${key}`);
   }
   const url = new URL(env.APP_URL);
@@ -17,6 +17,7 @@ export function config(env = process.env) {
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('APP_URL must be an origin');
   if (!/^[a-f0-9]{64}$/i.test(env.TOKEN_ENCRYPTION_KEY)) throw new Error('TOKEN_ENCRYPTION_KEY must be 32 bytes as hex');
   if (env.OPERATOR_TOKEN.length < 32) throw new Error('OPERATOR_TOKEN must have at least 32 characters');
+  if (env.INTERNAL_API_TOKEN.length < 32 || equal(env.INTERNAL_API_TOKEN, env.OPERATOR_TOKEN)) throw new Error('INTERNAL_API_TOKEN must have at least 32 characters and differ from OPERATOR_TOKEN');
   const shops = (env.ALLOWED_SHOPS || '').split(',').filter(Boolean).map(x => shopHost(x.trim()));
   const agents = JSON.parse(env.AGENTS_JSON || '[]');
   if (!Array.isArray(agents)) throw new Error('Invalid agent configuration');
@@ -27,7 +28,7 @@ export function config(env = process.env) {
   }
   const version = env.SHOPIFY_API_VERSION || '2026-10';
   if (!/^20\d{2}-(01|04|07|10)$/.test(version)) throw new Error('Invalid Shopify API version');
-  return { origin: url.origin, clientId: env.SHOPIFY_CLIENT_ID, secret: env.SHOPIFY_CLIENT_SECRET, encryptionKey: Buffer.from(env.TOKEN_ENCRYPTION_KEY, 'hex'), operator: env.OPERATOR_TOKEN, shops, agents, version, scopes: env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_inventory', writes: env.ENABLE_PRODUCT_WRITES === 'true', webhookHosts: (env.WEBHOOK_ALLOWED_HOSTS || '').split(',').filter(Boolean).map(x => x.trim().toLowerCase()), dir: resolve(env.DATA_DIR || './data') };
+  return { origin: url.origin, clientId: env.SHOPIFY_CLIENT_ID, secret: env.SHOPIFY_CLIENT_SECRET, encryptionKey: Buffer.from(env.TOKEN_ENCRYPTION_KEY, 'hex'), operator: env.OPERATOR_TOKEN, internalToken: env.INTERNAL_API_TOKEN, shops, agents, version, scopes: env.SHOPIFY_SCOPES || 'read_products,write_products,read_orders,read_inventory', writes: env.ENABLE_PRODUCT_WRITES === 'true', webhookHosts: (env.WEBHOOK_ALLOWED_HOSTS || '').split(',').filter(Boolean).map(x => x.trim().toLowerCase()), dir: resolve(env.DATA_DIR || './data') };
 }
 export class Vault {
   constructor(dir, key) { this.dir = dir; this.key = key; mkdirSync(dir, { recursive: true, mode: 0o700 }); }

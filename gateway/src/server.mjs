@@ -36,6 +36,54 @@ export function app(cfg, { vault = new Vault(cfg.dir, cfg.encryptionKey), api = 
       if (req.headers.origin && req.headers.origin !== cfg.origin) return reply(res, 403, { error: 'Origin denied' });
       for (const map of [tickets, states]) for (const [key, value] of map) if (value.expires < Date.now()) map.delete(key);
       if (req.method === 'GET' && url.pathname === '/health') return reply(res, 200, { service: 'Var80 Store Ops', status: 'ok' });
+      if (url.pathname.startsWith('/internal/')) {
+        if (!equal(bearer, cfg.internalToken)) return reply(res, 401, { error: 'Unauthorized' });
+        const match = /^\/internal\/stores\/([^/]+)(?:\/(connect|policy|bots|events|compliance|uninstall))?$/.exec(url.pathname);
+        if (!match) return reply(res, 404, { error: 'Not found' });
+        const shop = shopHost(decodeURIComponent(match[1])), action = match[2];
+        if (req.method === 'GET' && !action) {
+          const snapshot = registry.merchantSnapshot(shop);
+          return snapshot ? reply(res, 200, snapshot) : reply(res, 404, { error: 'Store not found' });
+        }
+        const input = JSON.parse((await body(req)).toString() || '{}');
+        if (req.method === 'POST' && action === 'connect') {
+          const { portalToken } = registry.ensureStore(shop, input.name || shop);
+          if (typeof input.access_token !== 'string' || input.access_token.length < 8) throw new Error('Invalid Shopify access token');
+          vault.set(shop, { access_token: input.access_token, scope: typeof input.scope === 'string' ? input.scope : '', expires_at: Number.isFinite(input.expires_at) ? input.expires_at : null, refresh_token: typeof input.refresh_token === 'string' ? input.refresh_token : undefined, installed_at: Date.now() });
+          vault.audit({ phase: 'embedded_connected', shop });
+          return reply(res, 200, { ...registry.merchantSnapshot(shop), portal_token: portalToken });
+        }
+        if (req.method === 'PATCH' && action === 'policy') return reply(res, 200, registry.merchantPolicy(shop, input));
+        if (req.method === 'POST' && action === 'bots') return reply(res, 200, registry.merchantBot(shop, input));
+        if (req.method === 'POST' && action === 'events') {
+          registry.enqueue(shop, input.topic, input.payload || {}, input.event_id);
+          return reply(res, 200, { received: true });
+        }
+        if (req.method === 'POST' && action === 'compliance') {
+          if (!['customers/data_request', 'customers/redact', 'shop/redact'].includes(input.topic) || typeof input.event_id !== 'string') throw new Error('Invalid compliance event');
+          if (!registry.data.compliance.some(c => c.event_id === input.event_id && c.shop === shop)) {
+            if (input.topic === 'shop/redact') registry.redactShop(shop);
+            else {
+              if (input.topic === 'customers/redact') {
+                registry.data.deliveries = registry.data.deliveries.filter(d => d.shop !== shop);
+                registry.data.compliance.filter(c => c.shop === shop).forEach(c => { delete c.payload; });
+              }
+              const payload = input.payload || {};
+              registry.data.compliance.push({ id: randomBytes(12).toString('hex'), event_id: input.event_id, shop, topic: input.topic, status: 'pending', created_at: new Date().toISOString(), payload: input.topic === 'customers/data_request' ? { request_id: payload.data_request?.id, customer_id: payload.customer?.id, orders_requested: payload.orders_requested || [] } : undefined });
+              registry.save();
+            }
+          }
+          return reply(res, 200, { received: true });
+        }
+        if (req.method === 'POST' && action === 'uninstall') {
+          const record = vault.get(shop);
+          if (record) vault.set(shop, { revoked: true, installed_at: record.installed_at });
+          registry.data.deliveries.filter(d => d.shop === shop && ['pending', 'retry'].includes(d.status)).forEach(d => { d.status = 'cancelled'; }); registry.save();
+          vault.audit({ phase: 'embedded_uninstalled', shop });
+          return reply(res, 200, { revoked: true });
+        }
+        return reply(res, 405, { error: 'Method not allowed' });
+      }
       if (req.method === 'GET' && url.pathname === '/' && url.searchParams.has('shop')) {
         const p = url.searchParams;
         if (!shopifyHmac(p, cfg.secret) || !/^\d+$/.test(p.get('timestamp')) || Math.abs(Date.now() / 1000 - Number(p.get('timestamp'))) > 300) return reply(res, 400, { error: 'Invalid Shopify launch signature' });

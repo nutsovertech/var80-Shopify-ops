@@ -1,0 +1,67 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "0b8688c98c79b97a8d6a33d2217424ff"
+name = "Var80 Store Ops"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_inventory,read_orders,read_products,write_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[events]
+api_version = "2026-10"
+
+  [[events.subscription]]
+  handle = "product-price-change"
+  topic = "Product"
+  actions = [ "update" ]
+  triggers = [ "product.variants.price", "product.variants.compareAtPrice" ]
+  uri = "/webhooks/products/update"
+  query = """
+  query product_variant_price_change($productId: ID!, $variantsId: ID!) {\r
+    product(id: $productId) {\r
+      id\r
+      title\r
+      status\r
+    }\r
+    productVariant(id: $variantsId) {\r
+      id\r
+      title\r
+      price\r
+      compareAtPrice\r
+    }\r
+  }\r
+  """
+  query_filter = "product.status:'ACTIVE'"

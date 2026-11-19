@@ -1,6 +1,11 @@
 let state, csrf, view = 'overview', filter = '', toastTimer;
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const renderHtml = (target, markup) => {
+  const template = document.createElement('template');
+  template.setHTML(markup, { sanitizer: new Sanitizer() });
+  target.replaceChildren(template.content.cloneNode(true));
+};
 const badge = (label, type = '') => `<span class="badge ${type}">${esc(label)}</span>`;
 const action = (name, id, label, cls = '') => `<button class="${cls}" data-action="${name}" data-id="${esc(id)}">${esc(label)}</button>`;
 const admin = () => state?.actor.role === 'admin';
@@ -17,7 +22,7 @@ async function refresh() {
   $('#login').hidden=true; $('#workspace').hidden=false;
   $('#role-label').textContent=admin()?'Admin workspace':'Client workspace';
   if (location.pathname !== (admin()?'/admin':'/client')) history.replaceState(null,'',admin()?'/admin':'/client');
-  $('#client-filter').innerHTML=(admin()?'<option value="">All clients</option>':'')+state.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  renderHtml($('#client-filter'),(admin()?'<option value="">All clients</option>':'')+state.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join(''));
   if (!admin()) filter=state.actor.client_id;
   if (filter && !state.clients.some(c=>c.id===filter)) filter='';
   $('#client-filter').value=filter;
@@ -35,7 +40,7 @@ function storeTable(list=stores()) {
 function render() {
   const tabs=admin()?[['overview','◈','Overview'],['clients','▦','Clients'],['stores','▧','Stores'],['bots','◇','Bot registry'],['activity','↗','Event activity'],['compliance','⊞','Privacy requests'],['settings','⚙','Connection guide']]:[['overview','◈','Overview'],['stores','▧','Your stores'],['bots','◇','Bot access'],['activity','↗','Event activity'],['settings','⚙','Connection guide']];
   if(!tabs.some(t=>t[0]===view))view='overview';
-  $('#nav').innerHTML=tabs.map(([id,icon,label])=>`<button data-view="${id}" class="${view===id?'active':''}"><span>${icon}</span>${label}</button>`).join('');
+  renderHtml($('#nav'),tabs.map(([id,icon,label])=>`<button data-view="${id}" class="${view===id?'active':''}"><span>${icon}</span>${label}</button>`).join(''));
   $('#breadcrumb').textContent=tabs.find(t=>t[0]===view)[2];
   let html='';
   if(view==='overview'){
@@ -50,9 +55,9 @@ function render() {
   if(view==='activity'){const ds=state.deliveries.filter(d=>stores().some(s=>s.shop===d.shop));html=title('EVENT DELIVERY','The route from store to bot.','Signed Shopify events are queued and delivered to configured bot webhooks.')+`<section class="panel">${!ds.length?empty('No event deliveries yet.','Configure a bot webhook and select its event topics. Deliveries will appear when Shopify sends those events.'):`<div class="table-scroll"><table><thead><tr><th>Event</th><th>Destination</th><th>Delivery</th><th>Attempts</th>${admin()?'<th>Actions</th>':''}</tr></thead><tbody>${ds.map(d=>`<tr><td><strong>${esc(d.topic)}</strong><small>${esc(d.shop)}</small></td><td>${esc(state.bots.find(b=>b.id===d.bot_id)?.name||d.bot_id)}</td><td>${badge(d.status,['failed','cancelled'].includes(d.status)?'bad':d.status==='delivered'?'':'warn')}</td><td>${d.attempts}${d.http_status?` · HTTP ${d.http_status}`:''}</td>${admin()?`<td>${['failed','cancelled'].includes(d.status)?action('retry',d.id,'Retry delivery'):''}</td>`:''}</tr>`).join('')}</tbody></table></div>`}</section>`;}
   if(view==='compliance')html=title('PRIVACY OPERATIONS','Requests that need a response.','Shopify compliance requests are recorded for review and resolution.')+`<section class="panel">${!state.compliance.length?empty('No privacy requests pending.','Verified Shopify compliance events will appear here.'):`<div class="table-scroll"><table><thead><tr><th>Request</th><th>Store</th><th>Status</th><th>Actions</th></tr></thead><tbody>${state.compliance.map(c=>`<tr><td><strong>${esc(c.topic)}</strong><small>${esc(c.created_at)}</small></td><td>${esc(c.shop)}</td><td>${badge(c.status,c.status==='completed'?'':'warn')}</td><td>${action('privacy-details',c.id,'View request')} ${c.status!=='completed'?action('resolve',c.id,'Record resolution'):''}</td></tr>`).join('')}</tbody></table></div>`}</section>`;
   if(view==='settings')html=title('CONNECTION GUIDE','One gateway. Two directions.','Bots pull data through MCP or API; store events wake bots through webhooks.')+`<section class="panel"><div class="panel-head"><h2>Agent connection</h2></div><div class="settings-content"><p>MCP endpoint</p><div class="endpoint">${esc(state.settings.mcp_url)}</div><p>Authentication: <code>Authorization: Bearer BOT_KEY</code></p><p class="muted">Use the unique key issued when registering a bot. Shopify credentials stay on the server. A bot only sees the tools and stores it is permitted to use.</p><p>REST tools: <code>GET /v1/tools</code> · <code>POST /v1/call</code></p></div></section><section class="panel"><div class="panel-head"><h2>Store → bot events</h2></div><div class="settings-content"><p>Shopify → Var80 Store Ops → configured bot webhook</p><p class="muted">Select event topics on each bot’s store assignment. Delivery sends resource identifiers and event metadata, not full order payloads. Bot webhook hosts must be enabled in server configuration.</p><p class="muted">ChatGPT needs a compatible connector authentication setup. Adding an OpenAI API key here does not connect ChatGPT.</p></div></section>`;
-  $('#main').innerHTML=html;
+  renderHtml($('#main'),html);
 }
-function modal(title,content){$('#modal-title').textContent=title;$('#modal-content').innerHTML=content;$('#modal').showModal();}
+function modal(title,content){$('#modal-title').textContent=title;renderHtml($('#modal-content'),content);$('#modal').showModal();}
 function form(title,fields,submit){modal(title,`<form id="edit-form">${fields}<p class="form-error" role="alert"></p><div class="form-actions"><button type="button" data-action="cancel">Cancel</button><button class="primary" type="submit">Save changes ↗</button></div></form>`);$('#edit-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const result=await submit(new FormData(e.target),e.target);$('#modal').close();await refresh();if(result?.token)showSecret(result.token);else toast('Configuration saved.');}catch(error){e.target.querySelector('.form-error').textContent=error.message;}finally{button.disabled=false;}});}
 function showSecret(token){modal('Save this access key',`<p class="help">This key is shown once. Store it securely and share it only with its intended user or agent. Rotating a key invalidates the previous one.</p><code class="secret">${esc(token)}</code><p class="help">Keep credentials out of GitHub and chat messages.</p><div class="form-actions"><button data-action="cancel" class="primary">I have saved the key</button></div>`);}
 async function handle(name,id){
