@@ -1,9 +1,10 @@
 let state, csrf, view = 'overview', filter = '', toastTimer;
+/* global Sanitizer */
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 const renderHtml = (target, markup) => {
   const template = document.createElement('template');
-  template.setHTML(markup, { sanitizer: new Sanitizer() });
+    template.setHTML(markup, { sanitizer: new Sanitizer() });
   target.replaceChildren(template.content.cloneNode(true));
 };
 const badge = (label, type = '') => `<span class="badge ${type}">${esc(label)}</span>`;
